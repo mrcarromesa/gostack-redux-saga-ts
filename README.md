@@ -405,3 +405,211 @@ export default store;
 ```shell
 yarn add redux-saga
 ```
+
+- No arquivo `src/store/index.ts` iniciamos a configuração do saga:
+
+```ts
+import { createStore, applyMiddleware } from 'redux';
+import { composeWithDevTools } from 'redux-devtools-extension';
+import createSagaMiddleware from 'redux-saga';
+import { CartState } from './modules/cart/types';
+import rootReducer from './modules/rootReducer';
+
+export interface State {
+  cart: CartState;
+}
+
+const sagaMiddleware = createSagaMiddleware();
+
+const middlewares = [sagaMiddleware];
+
+const store = createStore(rootReducer, composeWithDevTools(
+  applyMiddleware(...middlewares),
+));
+
+export default store;
+
+```
+
+- Em `src/store/modules/cart` criamos o `sagas.ts`
+
+- Nesse arquivo iremos interceptar as actions antes de chamar o reducer, algo importante sobre esse saga é a function take...:
+
+- os takes serve para lidarmos com promises no saga,
+- Pensando que o usuário clique no botão que chama API 5 vezes o takeLatest irá descartar todas as anteriores e considera apenas a última
+- takeEvery aguarda cada uma terminar para começar a outra chamada
+- takeLeading ignora todas as próximas e considera apenas a primeira
+- o mais utilizado é o takeLatest
+
+- Criamos também o arquivo `src/store/modules/rootSaga.ts`:
+
+```ts
+import { all, AllEffect, ForkEffect } from 'redux-saga/effects';
+
+import cart from './cart/sagas';
+
+export default function* rootSaga() : Generator<AllEffect<AllEffect<ForkEffect<never>>>> {
+  return yield all([
+    cart,
+  ]);
+}
+
+```
+
+- E por fim no `src/store/index.ts` adicionamos o seguinte:
+
+```ts
+sagaMiddleware.run(rootSaga);
+```
+
+- O generator ... `function* Function() { yield asyncAction(...) }` é semelhante ao `async` e `await` porém no saga não podemos utilizar o `async/await` dessa forma utilizamos o `generator`, por isso esse `*` depois da palavra `function`: `function*`
+
+---
+
+### Tipagem no Typescript
+
+- Uma forma interessante de criar um tipo com base do retorno de uma function é utilizar o `ReturnType<typeof A>;`:
+
+```ts
+import { addProductToCart } from './actions';
+
+type CheckProductStockRequest = ReturnType<typeof addProductToCart>;
+
+function checkProductStock({ payload }: CheckProductStockRequest): any {
+  //
+}
+```
+
+### Obtendo a quantidade do carrinho
+
+- No arquivo `src/store/modules/cart/sagas` utilizamos o `select` do redux para obter o valor atual do estado:
+
+```ts
+function* checkProductStock({ payload }: CheckProductStockRequest): any {
+  const { product } = payload;
+  const currentQuantity: number = yield select((state: State) => { // <- select utilizado para obter o estado atual
+    return state.cart.items.find((item) => item.product.id === product.id)?.quantity ?? 0;
+  });
+
+  console.log(currentQuantity);
+}
+```
+
+---
+
+### Actions para utilizar com o saga
+
+- Quando utilizamos o saga para interceptar ações ele pode retornar success ou falha, nesse caso o mais apropriado é dividir as actions em 3: Request, Succes, Failure
+
+
+- Dessa forma dentro de `src/store/modules/cart` ajustamos o actions, sagas e reducer
+
+- O pulo do gato é que o `saga` irá monitorar a action `ADD_PRODUCT_TO_CART_REQUEST` e o reducer `ADD_PRODUCT_TO_CART_SUCCESS`
+
+- Ajustamos também o component `CatalogItem`
+
+
+- Por fim para realizar uma chamada api com o saga devemos utilizar dessa forma com yield dentro de uma function generator, conforme `src/store/modules/cart/sagas.ts`:
+
+```ts
+const availableStockResponse: AxiosResponse<StockResponse> = yield call(api.get, `stock/${product.id}`);
+```
+
+- Utilizamos o `call` de dentro redux saga effects.
+
+- Agora de posse da informação podemos dispara mais uma action indicando sucesso ou falha, para isso podemos utilizar de dentro do redux sagas effects o `put`
+
+**Todo metodo que vem do saga precisa do `yield` na frente**
+
+- Podemos disparar as actions de dentro de `src/store/modules/cart/sagas.ts` dessa forma:
+
+```ts
+// ...
+if (availableStockResponse.data.quantity > currentQuantity) {
+  yield put(addProductToCartSuccess(product));
+} else {
+  yield put(addProductToCartFailure(product.id));
+}
+// ...
+```
+
+- Note porém que no `src/store/modules/cart/reducer.ts` não estamos "ouvindo" a action de falha `ADD_PRODUCT_TO_CART_FAILURE` então precisamos adicionar:
+
+```ts
+case 'ADD_PRODUCT_TO_CART_FAILURE': {
+  // TODO
+  break;
+}
+```
+
+### Trantando a falta de estoque
+
+- Vamos tratar a falta de estoque dos itens que houveram tentativa de compra passando isso para um estado do reducer
+
+- Primeiro precisamos adicionar essa nova prop na interface em `src/store/modules/cart/types`:
+
+```ts
+export interface CartState {
+  items: CartItem[];
+  failedStockCheck: number[];
+}
+```
+
+- e em `src/store/modules/cart/reducer.ts` adicionamos o seguinte:
+
+```ts
+//...
+case 'ADD_PRODUCT_TO_CART_FAILURE': {
+        draft.failedStockCheck.push(product.id);
+        break;
+      }
+//...
+```
+
+- Por fim realizamos ajustes no component `CatalogItem`:
+
+```tsx
+// ...
+const hasFailedStockCheck = useSelector<State, boolean>((state) => {
+    return state.cart.failedStockCheck.includes(product.id);
+  });
+// ...
+{ hasFailedStockCheck && <span style={{ color: 'red' }}>Falta de estoque</span> }
+// ...
+```
+
+---
+
+### POG: como sobrescrever uma interface
+
+- Podemos utilizar `extends Omit<InterfaceExtendida, 'attr1' | 'attr2'>` :
+
+```ts
+export interface ActionPayload {
+  type: string;
+  payload: {
+    product: Product
+  }
+}
+export interface ActionPayloadFailure extends Omit<ActionPayload, 'payload'> {
+  payload: {
+    product: Omit<Product, 'title' | 'price'>;
+  }
+}
+```
+
+---
+
+### Ajustando os nomes das Actions para melhor manutenção
+
+- Deixamos espalhado os nomes das actions, além de repetirmos em alguns outros lugares, isso para manutenção não será muito interessante, para resolver isso centralizamos um enum dentro do arquivo `types`:
+
+```ts
+export enum ActionTypes {
+  addProductToCartReequest = 'ADD_PRODUCT_TO_CART_REQUEST',
+  addProductToCartSuccess = 'ADD_PRODUCT_TO_CART_SUCCESS',
+  addProductToCartFailure = 'ADD_PRODUCT_TO_CART_FAILURE',
+}
+```
+
+- E ajustamos nos lugares onde essas actions são utilizadas como no caso do `reducer.ts`, `sagas.ts`

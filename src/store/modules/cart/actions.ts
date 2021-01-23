@@ -1,10 +1,26 @@
-import { Product } from './types';
+import {
+  ActionPayload, ActionPayloadFailure, ActionTypes, Product,
+} from './types';
 
-const addProductToCart = (product: Product): unknown => ({
-  type: 'ADD_PRODUCT_TO_CART',
+export const addProductToCartReequest = (product: Product): ActionPayload => ({
+  type: ActionTypes.addProductToCartReequest,
   payload: {
     product,
   },
 });
 
-export { addProductToCart };
+export const addProductToCartSuccess = (product: Product): ActionPayload => ({
+  type: ActionTypes.addProductToCartSuccess,
+  payload: {
+    product,
+  },
+});
+
+export const addProductToCartFailure = (productId: number): ActionPayloadFailure => ({
+  type: ActionTypes.addProductToCartFailure,
+  payload: {
+    product: {
+      id: productId,
+    },
+  },
+});
